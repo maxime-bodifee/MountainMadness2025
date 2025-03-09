@@ -1,6 +1,6 @@
-pywhatkit
 tf-keras
 opencv-python
 deepface
 pandas
 numpy
+shiny

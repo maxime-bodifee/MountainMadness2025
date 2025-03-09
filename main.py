@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from deepface import DeepFace
 import time
-from whatsapp import get_person_info  # Import the function from whatsapp.py
 
 
 # Configuration
@@ -26,6 +25,47 @@ def cosine_similarity(a, b):
     
     similarity = dot_product / (magnitude_a * magnitude_b)
     return similarity
+
+
+def create_alert(person_id):
+    # Load CSV file
+    df = pd.read_csv("citizens.csv")
+
+    # Search for the person with matching ID
+    person = df[df["ID"] == person_id]
+
+    if person.empty:
+        return "No record found for this ID."
+
+    # Extract values
+    name = person.iloc[0]["Legal Name"]
+    occupation = person.iloc[0]["Occupation"]
+    phone = person.iloc[0]["Phone Number"]
+    emergency = person.iloc[0]["Emergency Contact"]
+    sin = person.iloc[0]["Social Insurance Number"]
+    address = person.iloc[0]["Address"]
+
+    # Format message
+    message = f"""
+🚨 Possible Suicide Attempt Detected 🚨
+
+👤 Name: {name}
+
+💼 Occupation: {occupation}
+
+📞 Phone Number: {phone}
+
+📟 Emergency Contact: {emergency}
+
+🆔 Social Insurance Number: {sin}
+
+🏠 Home Address: {address}
+
+⚠️ Please take immediate action
+"""
+
+    with open("./alert.txt", "w", encoding="utf-8") as file:
+        file.write(message)
 
 class FaceRecognitionSystem:
     def __init__(self):
@@ -276,7 +316,7 @@ class FaceRecognitionSystem:
                         # Convert person_id to int and call get_person_info
                         person_id_int = int(person_id)
                         print(f"Negative emotion detected: {emotion}. Calling get_person_info for ID {person_id_int}")
-                        get_person_info(person_id_int)
+                        create_alert(person_id_int)
                 else:
                     # Increment age of last recognition
                     last_recognition['frames_ago'] += 1
