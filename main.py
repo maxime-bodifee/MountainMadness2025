@@ -1,17 +1,23 @@
-import cv2
 import os
+import time
+from datetime import datetime, timedelta
+
+import cv2
 import pandas as pd
 import numpy as np
 from deepface import DeepFace
-import time
+
 
 
 # Configuration
 REFERENCE_IMAGES_DIR = "./Faces"
 REFERENCE_DATA_CSV = "citizens.csv"
-SIMILARITY_THRESHOLD = 0.6  # Adjust as needed (0-1 range)
-PROCESS_EVERY_N_FRAMES = 5  # Process every Nth frame for better performance
+SIMILARITY_THRESHOLD = 0.5  # Adjust as needed (0-1 range)
+PROCESS_EVERY_N_FRAMES = 30  # Process every Nth frame for better performance
 NEGATIVE_EMOTIONS = ['sad', 'angry', 'fear', 'disgust']  # List of negative emotions
+
+last_alert_sent = {}
+
 
 def cosine_similarity(a, b):
     """Calculate cosine similarity between two vectors using NumPy"""
@@ -96,8 +102,8 @@ class FaceRecognitionSystem:
             
             # Create hashmap for quick lookups by ID
             for _, row in df.iterrows():
-                if 'id' in row:
-                    self.reference_data[row['id']] = row.to_dict()
+                if 'ID' in row:
+                    self.reference_data[row['ID']] = row.to_dict()
         else:
             print(f"Warning: Reference CSV not found at {REFERENCE_DATA_CSV}")
     
@@ -126,8 +132,9 @@ class FaceRecognitionSystem:
                     
                     # Get this person's name from the CSV data (if available)
                     name = person_id
+                    person_id = int(person_id)
                     if person_id in self.reference_data:
-                        name = self.reference_data[person_id].get('name', person_id)
+                        name = self.reference_data[person_id].get('Legal Name', person_id)
                     
                     # Read the image directly with OpenCV
                     img = cv2.imread(image_path)
@@ -138,7 +145,7 @@ class FaceRecognitionSystem:
                     # Extract face embedding using DeepFace
                     embedding_objs = DeepFace.represent(
                         img_path=img,  # Pass the image array directly
-                        model_name="VGG-Face",
+                        model_name="Facenet",
                         enforce_detection=False,
                         detector_backend="opencv"
                     )
@@ -174,7 +181,7 @@ class FaceRecognitionSystem:
             # Get embedding for current face
             embedding_objs = DeepFace.represent(
                 img_path=face_img,  # Pass the face image directly
-                model_name="VGG-Face", 
+                model_name="Facenet",
                 enforce_detection=False,
                 detector_backend="opencv"
             )
@@ -213,7 +220,8 @@ class FaceRecognitionSystem:
             # Check if the match is good enough
             if max_similarity > SIMILARITY_THRESHOLD:
                 person_id, name = self.reference_names[max_similarity_idx]
-                
+                person_id = int(person_id)
+
                 # Get all data for this person
                 person_data = None
                 if person_id in self.reference_data:
@@ -255,38 +263,38 @@ class FaceRecognitionSystem:
             'emotion': None,
             'frames_ago': 999
         }
-        
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            
+
             frame_count += 1
             process_recognition = (frame_count % PROCESS_EVERY_N_FRAMES == 0)
-            
+
             # Convert to grayscale for face detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
+
             # Always detect faces
             faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
-            
+
             # If we found faces
             if len(faces) > 0:
                 # Get the largest face
                 largest_face = None
                 largest_area = 0
-                
+
                 for (x, y, w, h) in faces:
                     area = w * h
                     if area > largest_area:
                         largest_area = area
                         largest_face = (x, y, w, h)
-                
+
                 x, y, w, h = largest_face
-                
+
                 # Always draw a rectangle around the face
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                
+
                 # Check if we should process recognition for this frame
                 if process_recognition:
                     # Extract face region
@@ -315,53 +323,56 @@ class FaceRecognitionSystem:
 
                         # Convert person_id to int and call get_person_info
                         person_id_int = int(person_id)
-                        print(f"Negative emotion detected: {emotion}. Calling get_person_info for ID {person_id_int}")
-                        create_alert(person_id_int)
+                        name = self.reference_data[person_id].get('Legal Name', person_id)
+                        if person_id_int not in last_alert_sent or datetime.now() - last_alert_sent[person_id_int] >= timedelta(seconds=1000):
+                            print(f"Negative emotion detected: {emotion}. Creating alert for ID: {person_id_int}, Name: {name}")
+                            create_alert(person_id_int)
+                            last_alert_sent[person_id_int] = datetime.now()
                 else:
                     # Increment age of last recognition
                     last_recognition['frames_ago'] += 1
-                
+
                 # Use last recognition data if it's recent enough
                 if last_recognition['frames_ago'] < 30:  # About 1 second at 30fps
                     # Update rectangle color based on match status
                     if last_recognition['match_found']:
                         cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                        
+
                         # Display name and similarity
-                        name = last_recognition['person_data'].get('name', last_recognition['person_id'])
+                        name = last_recognition['person_data'].get('Legal Name', last_recognition['person_id'])
                         display_text = f"{name} ({last_recognition['similarity']:.2f})"
-                        cv2.putText(frame, display_text, 
+                        cv2.putText(frame, display_text,
                                   (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                        
+
                         # Display emotion
-                        cv2.putText(frame, f"Emotion: {last_recognition['emotion']}", 
+                        cv2.putText(frame, f"Emotion: {last_recognition['emotion']}",
                                   (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                        
+
                         # Display additional data
                         y_offset = y+h+40
                         field_count = 0
                         for key, value in last_recognition['person_data'].items():
                             if key not in ['id', 'name'] and field_count < 3:
-                                cv2.putText(frame, f"{key}: {value}", 
+                                cv2.putText(frame, f"{key}: {value}",
                                           (x, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                                 y_offset += 20
                                 field_count += 1
                     else:
                         # Display "Unknown" and emotion
-                        cv2.putText(frame, f"Unknown ({last_recognition['similarity']:.2f})", 
+                        cv2.putText(frame, f"Unknown ({last_recognition['similarity']:.2f})",
                                   (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                        
+
                         if last_recognition['emotion']:
-                            cv2.putText(frame, f"Emotion: {last_recognition['emotion']}", 
+                            cv2.putText(frame, f"Emotion: {last_recognition['emotion']}",
                                       (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            
+
             # Display the frame
             cv2.imshow("Face Recognition", frame)
-            
+
             # Exit if 'q' is pressed
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-        
+
         # Release resources
         cap.release()
         cv2.destroyAllWindows()
